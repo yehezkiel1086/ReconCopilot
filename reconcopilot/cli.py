@@ -14,6 +14,7 @@ from reconcopilot.audit import log_audit, read_file_audit_logs
 from reconcopilot.config import load_config
 from reconcopilot.db import add_target, init_db, list_targets
 from reconcopilot.modules import recon, report, tracking, triage
+from reconcopilot.modules.recon import ToolNotFoundError
 from reconcopilot.scope import (
     ScopeChecker,
     ScopeViolationError,
@@ -31,7 +32,14 @@ scope_app = typer.Typer(
     help="Manage and verify engagement scopes.",
     no_args_is_help=True,
 )
+recon_app = typer.Typer(
+    name="recon",
+    help="Reconnaissance module commands wrapping subfinder, httpx, nuclei, and nmap.",
+    no_args_is_help=True,
+)
+
 app.add_typer(scope_app, name="scope")
+app.add_typer(recon_app, name="recon")
 
 console = Console()
 
@@ -315,6 +323,266 @@ def check_scope_cmd(
 
 
 # ==============================================================================
+# Reconnaissance Command Group
+# ==============================================================================
+
+
+@recon_app.command("subdomains")
+def recon_subdomains(
+    scope: str = typer.Option(
+        ..., "--scope", "-s", help="Engagement scope name to enumerate subdomains for."
+    ),
+    domain: Optional[str] = typer.Option(
+        None, "--domain", "-d", help="Specific in-scope domain to target."
+    ),
+) -> None:
+    """Enumerate subdomains using subfinder and save results to assets."""
+    try:
+        with console.status(
+            f"[bold cyan]Running subfinder for scope '{scope}'...[/bold cyan]"
+        ):
+            assets = recon.run_subdomain_enum(scope_name=scope, domain=domain)
+
+        console.print(
+            f"[bold green]✔ Discovered and saved [cyan]{len(assets)}[/cyan] in-scope assets.[/bold green]"
+        )
+        if assets:
+            table = Table(title=f"Discovered Subdomains ({scope})")
+            table.add_column("Asset", style="green")
+            for a in assets[:50]:
+                table.add_row(a)
+            if len(assets) > 50:
+                table.add_row(f"... and {len(assets) - 50} more")
+            console.print(table)
+    except ToolNotFoundError as exc:
+        console.print(f"[bold red]Tool Missing:[/bold red]\n{exc}")
+        raise typer.Exit(code=1)
+    except (ScopeViolationError, ValueError, FileNotFoundError) as exc:
+        console.print(f"[bold red]Error:[/bold red] {exc}")
+        raise typer.Exit(code=1)
+
+
+@recon_app.command("probe")
+def recon_probe(
+    scope: str = typer.Option(
+        ..., "--scope", "-s", help="Scope name to probe HTTP hosts for."
+    ),
+    target: Optional[str] = typer.Option(
+        None,
+        "--target",
+        "-t",
+        help="Specific target to probe instead of all scope assets.",
+    ),
+) -> None:
+    """Probe live HTTP services using httpx against discovered assets."""
+    try:
+        targets = [target] if target else None
+        with console.status(
+            f"[bold cyan]Running httpx probes for scope '{scope}'...[/bold cyan]"
+        ):
+            probes = recon.run_http_probing(scope_name=scope, targets=targets)
+
+        console.print(
+            f"[bold green]✔ Probed [cyan]{len(probes)}[/cyan] live HTTP services.[/bold green]"
+        )
+        if probes:
+            table = Table(title=f"HTTP Probes ({scope})")
+            table.add_column("URL", style="green")
+            table.add_column("Status", justify="right", style="cyan")
+            table.add_column("Title", style="white")
+            table.add_column("Technologies", style="magenta")
+            table.add_column("Length", justify="right", style="blue")
+
+            for p in probes[:50]:
+                code_style = "green" if p.get("status_code") == 200 else "yellow"
+                code_str = f"[{code_style}]{p.get('status_code') or '-'}[/{code_style}]"
+                table.add_row(
+                    p["url"],
+                    code_str,
+                    p.get("title", "")[:40],
+                    p.get("tech_stack", "")[:40],
+                    str(p.get("content_length", 0)),
+                )
+            if len(probes) > 50:
+                table.add_row(
+                    "...", "...", f"... and {len(probes) - 50} more", "...", "..."
+                )
+            console.print(table)
+    except ToolNotFoundError as exc:
+        console.print(f"[bold red]Tool Missing:[/bold red]\n{exc}")
+        raise typer.Exit(code=1)
+    except (ScopeViolationError, ValueError, FileNotFoundError) as exc:
+        console.print(f"[bold red]Error:[/bold red] {exc}")
+        raise typer.Exit(code=1)
+
+
+@recon_app.command("scan")
+def recon_scan(
+    scope: str = typer.Option(
+        ..., "--scope", "-s", help="Scope name to run vulnerability templates against."
+    ),
+    templates: Optional[str] = typer.Option(
+        None,
+        "--templates",
+        help="Nuclei template tags/filters (e.g. cve, exposure, tech).",
+    ),
+    target: Optional[str] = typer.Option(
+        None, "--target", "-t", help="Specific target URL to scan."
+    ),
+) -> None:
+    """Run nuclei template-based vulnerability scanning against probed hosts."""
+    try:
+        targets = [target] if target else None
+        with console.status(
+            f"[bold cyan]Running nuclei scan for scope '{scope}'...[/bold cyan]"
+        ):
+            findings = recon.run_nuclei_scan(
+                scope_name=scope, templates=templates, targets=targets
+            )
+
+        console.print(
+            f"[bold green]✔ Nuclei scan completed: [cyan]{len(findings)}[/cyan] findings recorded.[/bold green]"
+        )
+        if findings:
+            table = Table(title=f"Nuclei Findings ({scope})")
+            table.add_column("Template ID", style="cyan")
+            table.add_column("Severity", style="magenta")
+            table.add_column("Finding Name", style="white")
+            table.add_column("Matched URL", style="green")
+
+            for f in findings:
+                sev = f.get("severity", "info").lower()
+                sev_color = (
+                    "red"
+                    if sev in ("critical", "high")
+                    else ("yellow" if sev == "medium" else "cyan")
+                )
+                table.add_row(
+                    f["template_id"],
+                    f"[{sev_color}]{sev.upper()}[/{sev_color}]",
+                    f.get("name", "")[:40],
+                    f["matched_url"],
+                )
+            console.print(table)
+    except ToolNotFoundError as exc:
+        console.print(f"[bold red]Tool Missing:[/bold red]\n{exc}")
+        raise typer.Exit(code=1)
+    except (ScopeViolationError, ValueError, FileNotFoundError) as exc:
+        console.print(f"[bold red]Error:[/bold red] {exc}")
+        raise typer.Exit(code=1)
+
+
+@recon_app.command("ports")
+def recon_ports(
+    scope: str = typer.Option(
+        ..., "--scope", "-s", help="Scope name confirming authorization."
+    ),
+    target: str = typer.Option(
+        ..., "--target", "-t", help="Single explicit in-scope IP address or hostname."
+    ),
+    ports: Optional[str] = typer.Option(
+        None, "--ports", "-p", help="Specific ports to scan (e.g. 80,443,8080)."
+    ),
+) -> None:
+    """Run safe nmap port scan against one explicit in-scope target."""
+    try:
+        with console.status(
+            f"[bold cyan]Running safe nmap scan on '{target}'...[/bold cyan]"
+        ):
+            open_ports = recon.run_port_scan(
+                scope_name=scope, target=target, ports=ports
+            )
+
+        console.print(
+            f"[bold green]✔ Port scan complete: [cyan]{len(open_ports)}[/cyan] open ports on [yellow]{target}[/yellow].[/bold green]"
+        )
+        if open_ports:
+            table = Table(title=f"Open Ports ({target})")
+            table.add_column("Port", justify="right", style="cyan")
+            table.add_column("Protocol", style="blue")
+            table.add_column("State", style="green")
+            table.add_column("Service", style="magenta")
+
+            for p in open_ports:
+                table.add_row(
+                    str(p["port"]),
+                    p["protocol"],
+                    p["state"],
+                    p.get("service", ""),
+                )
+            console.print(table)
+    except ToolNotFoundError as exc:
+        console.print(f"[bold red]Tool Missing:[/bold red]\n{exc}")
+        raise typer.Exit(code=1)
+    except (ScopeViolationError, ValueError, FileNotFoundError) as exc:
+        console.print(f"[bold red]Error:[/bold red] {exc}")
+        raise typer.Exit(code=1)
+
+
+@recon_app.command("status")
+def recon_status(
+    scope: str = typer.Option(
+        ..., "--scope", "-s", help="Scope name to display summary for."
+    ),
+) -> None:
+    """Print a summary table of what's been discovered so far for that scope."""
+    try:
+        # Verify scope exists
+        ScopeChecker.from_name(scope)
+    except FileNotFoundError as exc:
+        console.print(f"[bold red]Error:[/bold red] {exc}")
+        raise typer.Exit(code=1)
+
+    summary = recon.get_recon_status(scope_name=scope)
+
+    table = Table(title=f"Reconnaissance Status: {scope}")
+    table.add_column("Metric", style="cyan", no_wrap=True)
+    table.add_column("Count / Value", style="green")
+    table.add_column("Details", style="white")
+
+    # Assets
+    table.add_row(
+        "Discovered Assets",
+        str(summary["total_assets"]),
+        "Subdomains and hosts discovered",
+    )
+
+    # HTTP Probes
+    status_summary = (
+        ", ".join(f"{k}: {v}" for k, v in summary["status_codes"].items())
+        if summary["status_codes"]
+        else "None"
+    )
+    table.add_row(
+        "Live HTTP Probes",
+        str(summary["total_http_probes"]),
+        f"HTTP status codes: {status_summary}",
+    )
+
+    # Open Ports
+    ports_summary = (
+        ", ".join(summary["sample_ports"][:15]) if summary["sample_ports"] else "None"
+    )
+    table.add_row(
+        "Open Ports", str(summary["total_open_ports"]), f"Sample: {ports_summary}"
+    )
+
+    # Nuclei Findings
+    sev_summary = (
+        ", ".join(f"{k}: {v}" for k, v in summary["severity_counts"].items())
+        if summary["severity_counts"]
+        else "None"
+    )
+    table.add_row(
+        "Nuclei Findings",
+        str(summary["total_nuclei_findings"]),
+        f"Severity: {sev_summary}",
+    )
+
+    console.print(table)
+
+
+# ==============================================================================
 # Target & Engagement Commands
 # ==============================================================================
 
@@ -426,7 +694,7 @@ def audit(
 
 
 # ==============================================================================
-# Phase Module Stubs
+# Phase Module Commands
 # ==============================================================================
 
 
@@ -440,10 +708,13 @@ def scan(
         None, "--scope", "-s", help="Scope name to check against."
     ),
 ) -> None:
-    """Run reconnaissance against target (Phase 2)."""
+    """Run reconnaissance against target (Phase 2 shortcut)."""
     try:
-        result = recon.run_recon(target=target, passive_only=passive, scope=scope)
-        console.print(f"[bold blue]Recon (Phase 2):[/bold blue] {result}")
+        norm = require_in_scope(target, scope=scope)
+        console.print(f"[bold blue]Recon target verified in scope:[/bold blue] {norm}")
+        console.print(
+            "[cyan]Hint:[/cyan] Use 'reconcopilot recon --help' to run subfinder, httpx, nuclei, or nmap."
+        )
     except ScopeViolationError as exc:
         console.print(f"[bold red]Scope Error:[/bold red] {exc}")
         raise typer.Exit(code=1)

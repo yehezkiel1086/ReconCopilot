@@ -14,7 +14,16 @@ def test_cli_help() -> None:
     assert "init" in result.output
     assert "add" in result.output
     assert "targets" in result.output
-    assert "check-scope" in result.output
+    assert "scope" in result.output
+
+
+def test_cli_scope_group_help() -> None:
+    result = runner.invoke(app, ["scope", "--help"])
+    assert result.exit_code == 0
+    assert "create" in result.output
+    assert "list" in result.output
+    assert "show" in result.output
+    assert "check" in result.output
 
 
 def test_cli_version() -> None:

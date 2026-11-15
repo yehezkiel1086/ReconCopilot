@@ -6,6 +6,7 @@ from typing import Optional
 
 import typer
 from rich.console import Console
+from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.table import Table
 
@@ -37,9 +38,15 @@ recon_app = typer.Typer(
     help="Reconnaissance module commands wrapping subfinder, httpx, nuclei, and nmap.",
     no_args_is_help=True,
 )
+triage_app = typer.Typer(
+    name="triage",
+    help="AI-assisted and rules-based reconnaissance finding triage.",
+    no_args_is_help=True,
+)
 
 app.add_typer(scope_app, name="scope")
 app.add_typer(recon_app, name="recon")
+app.add_typer(triage_app, name="triage")
 
 console = Console()
 
@@ -580,6 +587,143 @@ def recon_status(
     )
 
     console.print(table)
+
+
+# ==============================================================================
+# Triage Command Group
+# ==============================================================================
+
+
+@triage_app.command("run")
+def triage_run(
+    scope: str = typer.Option(
+        ..., "--scope", "-s", help="Scope name to prioritize findings for."
+    ),
+    top: int = typer.Option(
+        10, "--top", help="Number of top prioritized findings/targets to report."
+    ),
+    focus: Optional[str] = typer.Option(
+        None,
+        "--focus",
+        help="Optional focus query (e.g. 'admin portals', 'CVEs', 'databases').",
+    ),
+    ai: bool = typer.Option(
+        True, "--ai/--no-ai", help="Enable or disable Claude AI triage."
+    ),
+) -> None:
+    """Run security finding triage against discovered scope assets."""
+    try:
+        ScopeChecker.from_name(scope)
+    except FileNotFoundError as exc:
+        console.print(f"[bold red]Error:[/bold red] {exc}")
+        raise typer.Exit(code=1)
+
+    import os
+
+    cfg = load_config()
+    has_api_key = bool(cfg.ai.api_key or os.getenv("ANTHROPIC_API_KEY"))
+
+    if has_api_key and ai:
+        console.print(
+            Panel(
+                "[bold yellow]⚠️  ENGAGEMENT COMPLIANCE NOTICE[/bold yellow]\n\n"
+                "Reconnaissance data will be sent to the Claude API for AI-assisted triage.\n"
+                "Please confirm that transmitting hostnames, port details, and finding metadata\n"
+                "to a third-party AI provider is permitted under your program rules of engagement\n"
+                "and client authorization terms.",
+                title="[bold yellow]AI Triage Notice[/bold yellow]",
+                border_style="yellow",
+            )
+        )
+    else:
+        console.print(
+            "[yellow]Notice: No AI API key found (ANTHROPIC_API_KEY). Performing deterministic rules-based triage.[/yellow]"
+        )
+
+    try:
+        with console.status(
+            f"[bold cyan]Triaging findings for scope '{scope}'...[/bold cyan]"
+        ):
+            result = triage.triage_scope(
+                scope_name=scope,
+                top_n=top,
+                focus=focus or "",
+                use_ai=ai,
+            )
+
+        console.print(Markdown(result["summary_text"]))
+        console.print(
+            f"\n[bold green]✔ Triage run #{result['run_id']} stored for scope '{scope}'.[/bold green]"
+        )
+    except ValueError as exc:
+        console.print(f"[bold yellow]Triage Warning:[/bold yellow] {exc}")
+        raise typer.Exit(code=1)
+    except Exception as exc:
+        console.print(f"[bold red]Triage Error:[/bold red] {exc}")
+        raise typer.Exit(code=1)
+
+
+@triage_app.command("history")
+def triage_history(
+    scope: str = typer.Option(
+        ..., "--scope", "-s", help="Scope name to view past triage history for."
+    ),
+    limit: int = typer.Option(
+        20, "--limit", "-l", help="Number of past triage runs to list."
+    ),
+) -> None:
+    """List past triage runs with timestamps."""
+    try:
+        ScopeChecker.from_name(scope)
+    except FileNotFoundError as exc:
+        console.print(f"[bold red]Error:[/bold red] {exc}")
+        raise typer.Exit(code=1)
+
+    runs = triage.get_triage_history(scope_name=scope, limit=limit)
+    if not runs:
+        console.print(
+            f"[yellow]No triage history found for scope '{scope}'. Run 'reconcopilot triage run --scope {scope}' first.[/yellow]"
+        )
+        return
+
+    table = Table(title=f"Triage Run History ({scope})")
+    table.add_column("Run ID", justify="right", style="cyan")
+    table.add_column("Timestamp", style="blue")
+    table.add_column("Mode", style="magenta")
+    table.add_column("Focus", style="white")
+    table.add_column("Top N", justify="right", style="green")
+    table.add_column("Summary Preview", style="dim")
+
+    for r in runs:
+        mode_style = "cyan" if r["mode"] == "ai" else "yellow"
+        mode_label = f"[{mode_style}]{r['mode'].upper()}[/{mode_style}]"
+        preview = r.get("summary", "").replace("\n", " ")[:60] + "..."
+        table.add_row(
+            str(r["id"]),
+            r["timestamp"],
+            mode_label,
+            r.get("focus") or "(none)",
+            str(r.get("top_n", 10)),
+            preview,
+        )
+
+    console.print(table)
+
+
+@triage_app.command("show")
+def triage_show(
+    run_id: int = typer.Argument(..., help="Triage run ID to inspect."),
+) -> None:
+    """View full details of a specific past triage run."""
+    run = triage.get_triage_detail(run_id)
+    if not run:
+        console.print(f"[bold red]Error:[/bold red] Triage run #{run_id} not found.")
+        raise typer.Exit(code=1)
+
+    console.print(
+        f"[bold cyan]Triage Run #{run['id']}[/bold cyan] ({run['scope_name']} | {run['timestamp']} | Mode: {run['mode'].upper()})"
+    )
+    console.print(Markdown(run["ai_response"]))
 
 
 # ==============================================================================

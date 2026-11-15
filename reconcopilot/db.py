@@ -106,6 +106,26 @@ CREATE TABLE IF NOT EXISTS triage_runs (
 
 CREATE INDEX IF NOT EXISTS idx_triage_runs_scope ON triage_runs(scope_name);
 CREATE INDEX IF NOT EXISTS idx_triage_runs_timestamp ON triage_runs(timestamp);
+
+CREATE TABLE IF NOT EXISTS findings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scope TEXT NOT NULL,
+    title TEXT NOT NULL,
+    severity TEXT NOT NULL,
+    status TEXT NOT NULL,
+    affected_asset TEXT NOT NULL,
+    description TEXT DEFAULT '',
+    impact TEXT DEFAULT '',
+    reproduction_steps TEXT DEFAULT '',
+    remediation TEXT DEFAULT '',
+    cvss_score REAL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_findings_scope ON findings(scope);
+CREATE INDEX IF NOT EXISTS idx_findings_severity ON findings(severity);
+CREATE INDEX IF NOT EXISTS idx_findings_status ON findings(status);
 """
 
 
@@ -703,3 +723,160 @@ def get_triage_run(
         )
         row = cursor.fetchone()
         return dict(row) if row else None
+
+
+# ==============================================================================
+# Verified Findings Helpers (Manual Tracking)
+# ==============================================================================
+
+
+def add_finding(
+    scope: str,
+    title: str,
+    severity: str,
+    affected_asset: str,
+    description: str = "",
+    impact: str = "",
+    reproduction_steps: str = "",
+    remediation: str = "",
+    cvss_score: float | None = None,
+    status: str = "open",
+    db_path: str | Path | None = None,
+) -> int:
+    """Inserts a manually verified finding into the findings table."""
+    init_db(db_path)
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db(db_path) as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO findings (
+                scope, title, severity, status, affected_asset,
+                description, impact, reproduction_steps, remediation,
+                cvss_score, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                scope.strip(),
+                title.strip(),
+                severity.strip().lower(),
+                status.strip().lower(),
+                affected_asset.strip(),
+                description.strip(),
+                impact.strip(),
+                reproduction_steps.strip(),
+                remediation.strip(),
+                float(cvss_score) if cvss_score is not None else None,
+                now,
+                now,
+            ),
+        )
+        return int(cursor.lastrowid or 0)
+
+
+def list_findings(
+    scope: str,
+    severity: str | None = None,
+    status: str | None = None,
+    db_path: str | Path | None = None,
+) -> list[dict[str, Any]]:
+    """Retrieves verified findings for a scope, with optional severity and status filters."""
+    init_db(db_path)
+    query = "SELECT * FROM findings WHERE scope = ?"
+    params: list[Any] = [scope.strip()]
+
+    if severity:
+        query += " AND severity = ?"
+        params.append(severity.strip().lower())
+    if status:
+        query += " AND status = ?"
+        params.append(status.strip().lower())
+
+    query += " ORDER BY id DESC"
+
+    with get_db(db_path) as conn:
+        cursor = conn.execute(query, params)
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def get_finding(
+    finding_id: int,
+    db_path: str | Path | None = None,
+) -> dict[str, Any] | None:
+    """Retrieves full details of a specific finding by ID."""
+    init_db(db_path)
+    with get_db(db_path) as conn:
+        cursor = conn.execute("SELECT * FROM findings WHERE id = ?", (int(finding_id),))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+
+def update_finding(
+    finding_id: int,
+    status: str | None = None,
+    title: str | None = None,
+    severity: str | None = None,
+    affected_asset: str | None = None,
+    description: str | None = None,
+    impact: str | None = None,
+    reproduction_steps: str | None = None,
+    remediation: str | None = None,
+    cvss_score: float | None = None,
+    db_path: str | Path | None = None,
+) -> bool:
+    """Updates fields of an existing finding record, resetting updated_at."""
+    init_db(db_path)
+    updates: list[str] = []
+    params: list[Any] = []
+
+    if status is not None:
+        updates.append("status = ?")
+        params.append(status.strip().lower())
+    if title is not None:
+        updates.append("title = ?")
+        params.append(title.strip())
+    if severity is not None:
+        updates.append("severity = ?")
+        params.append(severity.strip().lower())
+    if affected_asset is not None:
+        updates.append("affected_asset = ?")
+        params.append(affected_asset.strip())
+    if description is not None:
+        updates.append("description = ?")
+        params.append(description.strip())
+    if impact is not None:
+        updates.append("impact = ?")
+        params.append(impact.strip())
+    if reproduction_steps is not None:
+        updates.append("reproduction_steps = ?")
+        params.append(reproduction_steps.strip())
+    if remediation is not None:
+        updates.append("remediation = ?")
+        params.append(remediation.strip())
+    if cvss_score is not None:
+        updates.append("cvss_score = ?")
+        params.append(float(cvss_score))
+
+    if not updates:
+        return False
+
+    updates.append("updated_at = ?")
+    params.append(datetime.now(timezone.utc).isoformat())
+
+    params.append(int(finding_id))
+    query = f"UPDATE findings SET {', '.join(updates)} WHERE id = ?"
+
+    with get_db(db_path) as conn:
+        cursor = conn.execute(query, params)
+        return cursor.rowcount > 0
+
+
+def delete_finding(
+    finding_id: int,
+    db_path: str | Path | None = None,
+) -> bool:
+    """Deletes a finding record by ID."""
+    init_db(db_path)
+    with get_db(db_path) as conn:
+        cursor = conn.execute("DELETE FROM findings WHERE id = ?", (int(finding_id),))
+        return cursor.rowcount > 0

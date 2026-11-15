@@ -15,6 +15,15 @@ def test_cli_help() -> None:
     assert "add" in result.output
     assert "targets" in result.output
     assert "scope" in result.output
+    assert "recon" in result.output
+    assert "triage" in result.output
+
+
+def test_cli_triage_group_help() -> None:
+    result = runner.invoke(app, ["triage", "--help"])
+    assert result.exit_code == 0
+    assert "run" in result.output
+    assert "history" in result.output
 
 
 def test_cli_scope_group_help() -> None:

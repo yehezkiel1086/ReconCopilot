@@ -25,7 +25,7 @@ ai:
   # API key for the AI provider (recommended: set via ANTHROPIC_API_KEY environment variable)
   api_key: ""
   # Model identifier to use for analysis, triage, and reasoning
-  model: "claude-3-5-sonnet-20241022"
+  model: "claude-sonnet-4-6"
   # Maximum tokens per LLM completion response
   max_tokens: 4096
   # Sampling temperature for reasoning generation (0.0 to 1.0)

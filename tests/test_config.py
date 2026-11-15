@@ -9,7 +9,7 @@ def test_default_config_fallback() -> None:
     cfg = load_config(config_path=Path("/nonexistent/path/config.yaml"))
     assert cfg.app.name == "ReconCopilot"
     assert cfg.ai.provider == "anthropic"
-    assert cfg.ai.model == "claude-3-5-sonnet-20241022"
+    assert cfg.ai.model == "claude-sonnet-4-6"
     assert cfg.scope.strict_mode is True
 
 

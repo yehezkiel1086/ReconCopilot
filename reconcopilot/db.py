@@ -92,6 +92,20 @@ CREATE TABLE IF NOT EXISTS open_ports (
 
 CREATE INDEX IF NOT EXISTS idx_open_ports_scope ON open_ports(scope_name);
 CREATE INDEX IF NOT EXISTS idx_open_ports_target ON open_ports(target);
+
+CREATE TABLE IF NOT EXISTS triage_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scope_name TEXT NOT NULL,
+    timestamp TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    raw_findings_sent TEXT NOT NULL,
+    ai_response TEXT NOT NULL,
+    focus TEXT DEFAULT '',
+    top_n INTEGER DEFAULT 10
+);
+
+CREATE INDEX IF NOT EXISTS idx_triage_runs_scope ON triage_runs(scope_name);
+CREATE INDEX IF NOT EXISTS idx_triage_runs_timestamp ON triage_runs(timestamp);
 """
 
 
@@ -613,3 +627,79 @@ def get_recon_summary(
         "total_nuclei_findings": total_findings,
         "severity_counts": severity_counts,
     }
+
+
+# ==============================================================================
+# Triage Runs Helpers
+# ==============================================================================
+
+
+def add_triage_run(
+    scope_name: str,
+    mode: str,
+    raw_findings_sent: str,
+    ai_response: str,
+    focus: str = "",
+    top_n: int = 10,
+    db_path: str | Path | None = None,
+) -> int:
+    """Inserts a record of a triage run."""
+    init_db(db_path)
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db(db_path) as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO triage_runs (
+                scope_name, timestamp, mode, raw_findings_sent, ai_response, focus, top_n
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                scope_name.strip(),
+                now,
+                mode.strip().lower(),
+                raw_findings_sent,
+                ai_response.strip(),
+                focus.strip(),
+                int(top_n),
+            ),
+        )
+        return int(cursor.lastrowid or 0)
+
+
+def list_triage_runs(
+    scope_name: str,
+    limit: int = 50,
+    db_path: str | Path | None = None,
+) -> list[dict[str, Any]]:
+    """Retrieves previous triage runs for a scope in reverse chronological order."""
+    init_db(db_path)
+    with get_db(db_path) as conn:
+        cursor = conn.execute(
+            """
+            SELECT id, scope_name, timestamp, mode, focus, top_n,
+                   substr(ai_response, 1, 150) as summary,
+                   ai_response
+            FROM triage_runs
+            WHERE scope_name = ?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (scope_name.strip(), int(limit)),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def get_triage_run(
+    run_id: int,
+    db_path: str | Path | None = None,
+) -> dict[str, Any] | None:
+    """Retrieves full details of a specific triage run by ID."""
+    init_db(db_path)
+    with get_db(db_path) as conn:
+        cursor = conn.execute(
+            "SELECT * FROM triage_runs WHERE id = ?",
+            (int(run_id),),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None

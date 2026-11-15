@@ -177,15 +177,29 @@ def record_audit_log(
         The newly created audit_log record id.
     """
     ts = timestamp or datetime.now(timezone.utc).isoformat()
-    with get_db(db_path) as conn:
-        cursor = conn.execute(
-            """
-            INSERT INTO audit_log (timestamp, action, target, details)
-            VALUES (?, ?, ?, ?)
-            """,
-            (ts, action.strip(), target.strip(), details.strip()),
-        )
-        return int(cursor.lastrowid)
+    try:
+        with get_db(db_path) as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO audit_log (timestamp, action, target, details)
+                VALUES (?, ?, ?, ?)
+                """,
+                (ts, action.strip(), target.strip(), details.strip()),
+            )
+            return int(cursor.lastrowid)
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc).lower():
+            init_db(db_path)
+            with get_db(db_path) as conn:
+                cursor = conn.execute(
+                    """
+                    INSERT INTO audit_log (timestamp, action, target, details)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (ts, action.strip(), target.strip(), details.strip()),
+                )
+                return int(cursor.lastrowid)
+        raise
 
 
 def list_audit_logs(

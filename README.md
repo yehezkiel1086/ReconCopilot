@@ -89,6 +89,24 @@ reconcopilot targets
 reconcopilot audit --limit 10
 ```
 
+### 5. Generate Engagement Reports (Phase 5)
+
+Generate comprehensive technical and executive reports in Markdown, HTML, JSON, or YAML:
+
+```bash
+# Generate Markdown report (with AI polish if ANTHROPIC_API_KEY is configured)
+reconcopilot report generate --scope acme-corp-2026 --format markdown
+
+# Generate standalone styled HTML report
+reconcopilot report generate --scope acme-corp-2026 --format html -o ./reports/final.html
+
+# Deterministic report without AI polish
+reconcopilot report generate --scope acme-corp-2026 --format markdown --no-ai
+
+# Export structured findings data for external pipelines
+reconcopilot report generate --scope acme-corp-2026 --format json
+```
+
 ---
 
 ## Development & Testing

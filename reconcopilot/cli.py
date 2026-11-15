@@ -49,11 +49,17 @@ finding_app = typer.Typer(
     help="Track, update, and export verified security findings.",
     no_args_is_help=True,
 )
+report_app = typer.Typer(
+    name="report",
+    help="Generate security assessment and reconnaissance reports.",
+    no_args_is_help=True,
+)
 
 app.add_typer(scope_app, name="scope")
 app.add_typer(recon_app, name="recon")
 app.add_typer(triage_app, name="triage")
 app.add_typer(finding_app, name="finding")
+app.add_typer(report_app, name="report")
 
 console = Console()
 
@@ -1002,6 +1008,89 @@ def finding_export(
 
 
 # ==============================================================================
+# Security Assessment Report Generation Command Group
+# ==============================================================================
+
+
+@report_app.command("generate")
+def report_generate(
+    scope: str = typer.Option(
+        ..., "--scope", "-s", help="Scope name to generate report for."
+    ),
+    format: str = typer.Option(
+        "markdown",
+        "--format",
+        "-f",
+        help="Report format: markdown, html, json, or yaml.",
+    ),
+    output: Optional[Path] = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Custom destination file path for generated report.",
+    ),
+    ai: bool = typer.Option(
+        True,
+        "--ai/--no-ai",
+        help="Enable or disable Claude AI prose polish and executive summary generation.",
+    ),
+) -> None:
+    """Generate a comprehensive security assessment report from verified findings."""
+    import os
+
+    try:
+        ScopeChecker.from_name(scope)
+    except FileNotFoundError as exc:
+        console.print(f"[bold red]Error:[/bold red] {exc}")
+        raise typer.Exit(code=1)
+
+    cfg = load_config()
+    has_api_key = bool(cfg.ai.api_key or os.getenv("ANTHROPIC_API_KEY"))
+
+    if has_api_key and ai:
+        console.print(
+            Panel(
+                "[bold yellow]⚠️  ENGAGEMENT COMPLIANCE NOTICE[/bold yellow]\n\n"
+                "Report summary metrics and finding prose will be sent to the Claude API for executive polishing.\n"
+                "Please confirm that transmitting vulnerability titles and description context\n"
+                "to a third-party AI provider is permitted under your program rules of engagement\n"
+                "and client authorization terms.",
+                title="[bold yellow]AI Reporting Notice[/bold yellow]",
+                border_style="yellow",
+            )
+        )
+    elif not has_api_key and ai:
+        console.print(
+            "[yellow]Notice: No AI API key found (ANTHROPIC_API_KEY). Generating report using deterministic template.[/yellow]"
+        )
+
+    try:
+        with console.status(
+            f"[bold cyan]Generating {format} report for scope '{scope}'...[/bold cyan]"
+        ):
+            result = report.generate_report(
+                scope_name=scope,
+                output_format=format,
+                output_path=output,
+                use_ai=ai,
+            )
+
+        console.print(
+            f"\n[bold green]✔ Report successfully generated ({result['mode']} mode)![/bold green]\n"
+            f"  [cyan]Scope:[/cyan] {result['scope_name']}\n"
+            f"  [cyan]Findings:[/cyan] {result['findings_count']}\n"
+            f"  [cyan]Format:[/cyan] {result['format'].upper()}\n"
+            f"  [cyan]Saved to:[/cyan] [bold underline]{result['file_path']}[/bold underline]"
+        )
+    except ValueError as exc:
+        console.print(f"[bold red]Format Error:[/bold red] {exc}")
+        raise typer.Exit(code=1)
+    except Exception as exc:
+        console.print(f"[bold red]Report Generation Error:[/bold red] {exc}")
+        raise typer.Exit(code=1)
+
+
+# ==============================================================================
 # Target & Engagement Commands
 # ==============================================================================
 
@@ -1172,18 +1261,6 @@ def track(
     except ScopeViolationError as exc:
         console.print(f"[bold red]Scope Error:[/bold red] {exc}")
         raise typer.Exit(code=1)
-
-
-@app.command()
-def report_cmd(
-    scope_name: str = typer.Argument("default", help="Scope group name."),
-    format: str = typer.Option(
-        "markdown", "--format", help="Output format (markdown/json/html)."
-    ),
-) -> None:
-    """Generate engagement report (Phase 5)."""
-    result = report.generate_report(scope_name=scope_name, output_format=format)
-    console.print(f"[bold blue]Report (Phase 5):[/bold blue] {result}")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,89 @@
+# ==============================================================================
+# ReconCopilot Configuration Example
+# ==============================================================================
+# Default search location: ~/.config/reconcopilot/config.yaml
+# Environment variables override these options.
+# Examples:
+#   ANTHROPIC_API_KEY overrides ai.api_key
+#   RECONCOPILOT_DB_PATH overrides database.path
+#   RECONCOPILOT_LOG_LEVEL overrides app.log_level
+# ==============================================================================
+
+# Application-level settings
+app:
+  # Name of the application instance
+  name: "ReconCopilot"
+  # Environment mode: development, staging, production
+  environment: "development"
+  # Logging verbosity: DEBUG, INFO, WARNING, ERROR, CRITICAL
+  log_level: "INFO"
+
+# Artificial Intelligence / LLM backend configuration
+ai:
+  # LLM provider to use (default: anthropic)
+  provider: "anthropic"
+  # API key for the AI provider (recommended: set via ANTHROPIC_API_KEY environment variable)
+  api_key: ""
+  # Model identifier to use for analysis, triage, and reasoning
+  model: "claude-3-5-sonnet-20241022"
+  # Maximum tokens per LLM completion response
+  max_tokens: 4096
+  # Sampling temperature for reasoning generation (0.0 to 1.0)
+  temperature: 0.2
+
+# Database storage settings
+database:
+  # SQLite database path (can use ~ for home directory expansion)
+  path: "~/.config/reconcopilot/reconcopilot.db"
+  # Connection timeout in seconds
+  timeout: 30.0
+
+# Audit logging settings for compliance and tracking actions
+audit:
+  # Path to local audit log text file
+  log_file: "~/.config/reconcopilot/audit.log"
+  # Enable or disable audit logging to file and database
+  enabled: true
+  # Format of log entries: json or text
+  format: "json"
+
+# Scope definition and safety enforcement
+scope:
+  # Path to a text file containing allowlisted domains, CIDRs, or IPs (one per line)
+  allowlist_file: ""
+  # Enforce strict scope: reject any action or target not explicitly matching the allowlist
+  strict_mode: true
+  # Allow private IP ranges (RFC 1918) like 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
+  allow_private_ips: false
+
+# Reconnaissance module options (Phase 2)
+recon:
+  # If true, only run non-intrusive passive reconnaissance
+  passive_only: true
+  # Concurrency worker thread count for network queries
+  threads: 10
+  # Network request timeout in seconds
+  timeout_seconds: 30
+  # Rate limit in requests per second
+  rate_limit: 5
+
+# Triage & vulnerability evaluation options (Phase 3)
+triage:
+  # Minimum severity score threshold for alerts (0.0 to 10.0)
+  severity_threshold: 4.0
+  # Automatically generate suggested remediation steps
+  auto_suggest_remediation: true
+
+# Target tracking & delta monitoring options (Phase 4)
+tracking:
+  # Interval in hours for recurring delta checks
+  check_interval_hours: 24
+  # Notify on newly discovered assets or port state changes
+  notify_on_changes: true
+
+# Reporting & export options (Phase 5)
+report:
+  # Directory where generated reports will be stored
+  output_dir: "./output/reports"
+  # Default report format: markdown, json, or html
+  default_format: "markdown"

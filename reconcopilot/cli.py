@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Optional
 
 import typer
@@ -43,10 +44,16 @@ triage_app = typer.Typer(
     help="AI-assisted and rules-based reconnaissance finding triage.",
     no_args_is_help=True,
 )
+finding_app = typer.Typer(
+    name="finding",
+    help="Track, update, and export verified security findings.",
+    no_args_is_help=True,
+)
 
 app.add_typer(scope_app, name="scope")
 app.add_typer(recon_app, name="recon")
 app.add_typer(triage_app, name="triage")
+app.add_typer(finding_app, name="finding")
 
 console = Console()
 
@@ -724,6 +731,274 @@ def triage_show(
         f"[bold cyan]Triage Run #{run['id']}[/bold cyan] ({run['scope_name']} | {run['timestamp']} | Mode: {run['mode'].upper()})"
     )
     console.print(Markdown(run["ai_response"]))
+
+
+# ==============================================================================
+# Verified Finding Management Command Group
+# ==============================================================================
+
+
+@finding_app.command("add")
+def finding_add(
+    scope: str = typer.Option(
+        ..., "--scope", "-s", help="Scope name this finding belongs to."
+    ),
+    title: Optional[str] = typer.Option(
+        None, "--title", help="Finding title (e.g. 'SQL Injection in /api/search')."
+    ),
+    severity: Optional[str] = typer.Option(
+        None, "--severity", help="Severity level (critical, high, medium, low, info)."
+    ),
+    affected_asset: Optional[str] = typer.Option(
+        None,
+        "--asset",
+        "--affected-asset",
+        help="Affected in-scope host, domain, or IP.",
+    ),
+    status: str = typer.Option(
+        "open",
+        "--status",
+        help="Finding status (open, fixed, accepted-risk, duplicate, not-applicable).",
+    ),
+    description: Optional[str] = typer.Option(
+        None, "--description", "-d", help="Detailed description of the finding."
+    ),
+    impact: Optional[str] = typer.Option(
+        None, "--impact", help="Impact and business risk."
+    ),
+    reproduction_steps: Optional[str] = typer.Option(
+        None, "--repro", "--reproduction-steps", help="Steps to reproduce."
+    ),
+    remediation: Optional[str] = typer.Option(
+        None, "--remediation", help="Remediation guidance."
+    ),
+    cvss_score: Optional[float] = typer.Option(
+        None, "--cvss", help="CVSS score (0.0 to 10.0)."
+    ),
+    non_interactive: bool = typer.Option(
+        False, "--non-interactive", help="Do not prompt for missing fields."
+    ),
+) -> None:
+    """Add a manually verified security finding."""
+    try:
+        ScopeChecker.from_name(scope)
+    except FileNotFoundError as exc:
+        console.print(f"[bold red]Error:[/bold red] {exc}")
+        raise typer.Exit(code=1)
+
+    if not non_interactive:
+        if title is None:
+            title = typer.prompt("Finding Title")
+        if affected_asset is None:
+            affected_asset = typer.prompt("Affected Asset (host/domain/IP)")
+        if severity is None:
+            severity = typer.prompt(
+                "Severity (critical, high, medium, low, info)", default="medium"
+            )
+        if description is None:
+            description = typer.prompt("Description", default="")
+        if impact is None:
+            impact = typer.prompt("Impact / Business Risk", default="")
+        if reproduction_steps is None:
+            reproduction_steps = typer.prompt("Reproduction Steps", default="")
+        if remediation is None:
+            remediation = typer.prompt("Remediation Guidance", default="")
+        if cvss_score is None:
+            cvss_raw = typer.prompt("CVSS Score (0.0 - 10.0, optional)", default="")
+            cvss_score = float(cvss_raw) if cvss_raw.strip() else None
+
+    if not title or not affected_asset:
+        console.print(
+            "[bold red]Error:[/bold red] Both --title and --asset are required."
+        )
+        raise typer.Exit(code=1)
+
+    try:
+        finding = tracking.create_finding(
+            scope=scope,
+            title=title,
+            severity=severity or "medium",
+            affected_asset=affected_asset,
+            description=description or "",
+            impact=impact or "",
+            reproduction_steps=reproduction_steps or "",
+            remediation=remediation or "",
+            cvss_score=cvss_score,
+            status=status,
+        )
+        console.print(
+            f"[bold green]✔ Added finding #{finding['id']}:[/bold green] [cyan]{finding['title']}[/cyan] "
+            f"([{finding['severity'].upper()}] on [yellow]{finding['affected_asset']}[/yellow])"
+        )
+    except ScopeViolationError as exc:
+        console.print(f"[bold red]Scope Error:[/bold red] {exc}")
+        raise typer.Exit(code=1)
+    except ValueError as exc:
+        console.print(f"[bold red]Validation Error:[/bold red] {exc}")
+        raise typer.Exit(code=1)
+
+
+@finding_app.command("list")
+def finding_list(
+    scope: str = typer.Option(
+        ..., "--scope", "-s", help="Scope name to filter findings by."
+    ),
+    severity: Optional[str] = typer.Option(
+        None,
+        "--severity",
+        help="Filter by severity (critical, high, medium, low, info).",
+    ),
+    status: Optional[str] = typer.Option(
+        None,
+        "--status",
+        help="Filter by status (open, fixed, accepted-risk, duplicate, not-applicable).",
+    ),
+) -> None:
+    """List verified security findings for a scope."""
+    try:
+        findings = tracking.list_findings(scope=scope, severity=severity, status=status)
+    except (FileNotFoundError, ValueError) as exc:
+        console.print(f"[bold red]Error:[/bold red] {exc}")
+        raise typer.Exit(code=1)
+
+    if not findings:
+        filter_str = (
+            f" with filters (severity={severity}, status={status})"
+            if (severity or status)
+            else ""
+        )
+        console.print(
+            f"[yellow]No findings found for scope '{scope}'{filter_str}.[/yellow]"
+        )
+        return
+
+    table = Table(title=f"Verified Findings ({scope})")
+    table.add_column("ID", justify="right", style="cyan")
+    table.add_column("Severity", style="magenta")
+    table.add_column("Status", style="blue")
+    table.add_column("Title", style="white")
+    table.add_column("Affected Asset", style="green")
+    table.add_column("CVSS", justify="right", style="yellow")
+    table.add_column("Updated At", style="dim")
+
+    for f in findings:
+        sev = f["severity"].lower()
+        sev_color = (
+            "red"
+            if sev in ("critical", "high")
+            else ("yellow" if sev == "medium" else "cyan")
+        )
+        stat = f["status"].lower()
+        stat_color = (
+            "green" if stat == "fixed" else ("yellow" if stat == "open" else "dim")
+        )
+
+        table.add_row(
+            str(f["id"]),
+            f"[{sev_color}]{f['severity'].upper()}[/{sev_color}]",
+            f"[{stat_color}]{f['status'].upper()}[/{stat_color}]",
+            f["title"][:40],
+            f["affected_asset"],
+            str(f["cvss_score"]) if f["cvss_score"] is not None else "-",
+            f["updated_at"][:19],
+        )
+
+    console.print(table)
+
+
+@finding_app.command("show")
+def finding_show(
+    id: int = typer.Argument(..., help="Finding ID to inspect."),
+) -> None:
+    """Print complete details for a specific finding."""
+    f = tracking.get_finding(id)
+    if not f:
+        console.print(f"[bold red]Error:[/bold red] Finding #{id} not found.")
+        raise typer.Exit(code=1)
+
+    sev = f["severity"].lower()
+    sev_color = (
+        "red"
+        if sev in ("critical", "high")
+        else ("yellow" if sev == "medium" else "cyan")
+    )
+    stat = f["status"].lower()
+    stat_color = "green" if stat == "fixed" else "yellow"
+
+    lines = [
+        f"[bold cyan]Finding ID:[/bold cyan] {f['id']}",
+        f"[bold white]Title:[/bold white] {f['title']}",
+        f"[bold magenta]Scope:[/bold magenta] {f['scope']}",
+        f"[{sev_color}]Severity:[/{sev_color}] {f['severity'].upper()}  |  [{stat_color}]Status:[/{stat_color}] {f['status'].upper()}  |  CVSS: {f.get('cvss_score') or 'N/A'}",
+        f"[bold green]Affected Asset:[/bold green] {f['affected_asset']}",
+        f"[bold dim]Created At:[/bold dim] {f['created_at']}  |  [bold dim]Updated At:[/bold dim] {f['updated_at']}",
+        "",
+        "[bold cyan]Description:[/bold cyan]",
+        f.get("description") or "(none)",
+        "",
+        "[bold cyan]Impact:[/bold cyan]",
+        f.get("impact") or "(none)",
+        "",
+        "[bold cyan]Reproduction Steps:[/bold cyan]",
+        f.get("reproduction_steps") or "(none)",
+        "",
+        "[bold cyan]Remediation Guidance:[/bold cyan]",
+        f.get("remediation") or "(none)",
+    ]
+
+    console.print(Panel("\n".join(lines), title=f"Finding #{f['id']}: {f['title']}"))
+
+
+@finding_app.command("update")
+def finding_update(
+    id: int = typer.Argument(..., help="Finding ID to update."),
+    status: str = typer.Option(
+        ...,
+        "--status",
+        help="New status (open, fixed, accepted-risk, duplicate, not-applicable).",
+    ),
+) -> None:
+    """Update status of an existing verified finding."""
+    try:
+        updated = tracking.update_finding_status(finding_id=id, status=status)
+        console.print(
+            f"[bold green]✔ Finding #{id} updated:[/bold green] status is now [yellow]{updated['status'].upper()}[/yellow]"
+        )
+    except KeyError as exc:
+        console.print(f"[bold red]Error:[/bold red] {exc}")
+        raise typer.Exit(code=1)
+    except ValueError as exc:
+        console.print(f"[bold red]Validation Error:[/bold red] {exc}")
+        raise typer.Exit(code=1)
+
+
+@finding_app.command("export")
+def finding_export(
+    scope: str = typer.Option(
+        ..., "--scope", "-s", help="Scope name to export findings for."
+    ),
+    format: str = typer.Option(
+        "json", "--format", "-f", help="Output format (currently 'json' is supported)."
+    ),
+    output: Optional[str] = typer.Option(
+        None, "--output", "-o", help="Optional file path to write export into."
+    ),
+) -> None:
+    """Export all verified findings for a scope as JSON."""
+    try:
+        json_data = tracking.export_findings(scope=scope, export_format=format)
+        if output:
+            p = Path(output).resolve()
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(json_data, encoding="utf-8")
+            console.print(
+                f"[bold green]✔ Exported findings to:[/bold green] [cyan]{p}[/cyan]"
+            )
+        else:
+            print(json_data)
+    except (FileNotFoundError, ValueError) as exc:
+        console.print(f"[bold red]Error:[/bold red] {exc}")
+        raise typer.Exit(code=1)
 
 
 # ==============================================================================

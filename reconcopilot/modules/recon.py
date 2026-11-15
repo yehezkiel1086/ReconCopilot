@@ -5,21 +5,29 @@ from __future__ import annotations
 from typing import Any
 
 from reconcopilot.audit import log_audit
-from reconcopilot.scope import enforce_scope
+from reconcopilot.scope import ScopeChecker, require_in_scope
 
 
-def run_recon(target: str, passive_only: bool = True) -> dict[str, Any]:
+@require_in_scope
+def run_recon(
+    target: str,
+    passive_only: bool = True,
+    scope: str | ScopeChecker | None = None,
+) -> dict[str, Any]:
     """Runs reconnaissance against an authorized target.
 
     Args:
         target: Host, domain, or IP.
         passive_only: Whether to restrict to passive sources.
+        scope: Optional scope name or ScopeChecker instance.
 
     Returns:
         Discovered asset and service metadata.
+
+    Raises:
+        ScopeViolationError: If target is not authorized in scope.
     """
-    # Enforce scope authorization before any reconnaissance activity
-    normalized_target = enforce_scope(target)
+    normalized_target = require_in_scope(target, scope=scope)
 
     log_audit(
         action="recon.execute",
